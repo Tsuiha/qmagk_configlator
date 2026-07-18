@@ -1,0 +1,1 @@
+# qmagk_configlator
