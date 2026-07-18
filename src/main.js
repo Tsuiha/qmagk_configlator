@@ -85,7 +85,7 @@ let calibrationTransitionTarget = null;
 let pcbCalRunning = false;
 let selectionAnchorIdx = null;
 let cancelPickMode = "trigger";
-let selectedCancelTargetIdx = null;
+let selectedCancelTargetIdx;
 let realtimeTimerId = null;
 let realtimePolling = false;
 let realtimeDcurValues = [];
@@ -1406,33 +1406,34 @@ function encodeCclParams(params, paramSize) {
   const bytes = new Uint8Array(params.length * paramSize);
   params.forEach((param, index) => {
     const offset = index * paramSize;
-    writeU16LE(bytes, offset, normalizeCclTarget(param.tgtIdx));
+    writeU16LE(bytes, offset, normalizeCclTarget(param.tgtIdx, index));
     writeU16LE(bytes, offset + 2, param.tgtTh);
   });
   return bytes;
 }
 
-function formatCclTarget(value) {
-  return isValidCancelTarget(value) ? String(value) : "None";
+function formatCclTarget(value, triggerIdx = null) {
+  return isValidCancelTarget(value, triggerIdx) ? String(value) : "None";
 }
 
-function formatCclTargetLabel(value) {
-  return isValidCancelTarget(value) ? `Key ID ${value}` : "None";
+function formatCclTargetLabel(value, triggerIdx = null) {
+  return isValidCancelTarget(value, triggerIdx) ? `Key ID ${value}` : "None";
 }
 
-function isValidCancelTarget(value) {
-  if (value == null) return false;
+function isValidCancelTarget(value, triggerIdx = null) {
+  if (value == null || value === 255) return false;
+  if (triggerIdx != null && value === triggerIdx) return false;
   return getActiveLayoutEntries().some((entry) => entry.idx === value);
 }
 
-function normalizeCclTarget(value) {
-  return isValidCancelTarget(value) ? value : 255;
+function normalizeCclTarget(value, triggerIdx = null) {
+  return isValidCancelTarget(value, triggerIdx) ? value : 255;
 }
 
 function cclParamHtml(entry, param) {
   return `
     <span class="cancel-idx">Key ID ${entry.idx}</span>
-    <span>tgt: ${formatCclTarget(param?.tgtIdx)}</span>
+    <span>tgt: ${formatCclTarget(param?.tgtIdx, entry.idx)}</span>
     <span>th: ${formatParamValue(param?.tgtTh)}</span>
   `;
 }
@@ -1543,13 +1544,18 @@ function setSelectedCancelKeys(indices, anchorIdx = null) {
 
 function selectCancelKey(entry, event) {
   if (cancelPickMode === "target") {
-    selectedCancelTargetIdx = entry.idx;
+    const triggerIdx = selectedLayoutEntry?.idx;
+    if (triggerIdx != null && entry.idx === triggerIdx) {
+      log("TargetにTrigger自身は設定できません。", "warn");
+      return;
+    }
+    selectedCancelTargetIdx = normalizeCclTarget(entry.idx, triggerIdx);
   } else {
     selectedCancelKeyIndices.clear();
     selectedCancelKeyIndices.add(entry.idx);
     selectedLayoutEntry = entry;
     const param = lastCclParams[entry.idx];
-    selectedCancelTargetIdx = normalizeCclTarget(param?.tgtIdx);
+    selectedCancelTargetIdx = normalizeCclTarget(param?.tgtIdx, entry.idx);
   }
   setDirtyStatus();
   renderCancelLayout(lastLayoutEntries, lastCclParams, lastLayoutState, selectedLayoutEntry?.idx);
@@ -1569,14 +1575,13 @@ function applyCclParams() {
   const triggerIdx = [...selectedCancelKeyIndices][0];
   if (triggerIdx == null) return;
   const thInput = cancelKeyDetail.querySelector("#bulkCclTh");
-  const updates = {
-    tgtIdx: normalizeCclTarget(selectedCancelTargetIdx),
-    tgtTh: thInput?.value.trim() === "" ? paramRanges.cclTh.min : clampByRange("cclTh", thInput.value),
-  };
   selectedCancelKeyIndices.forEach((idx) => {
     const param = lastCclParams[idx];
     if (!param) return;
-    Object.assign(param, updates);
+    Object.assign(param, {
+      tgtIdx: normalizeCclTarget(selectedCancelTargetIdx, idx),
+      tgtTh: thInput?.value.trim() === "" ? paramRanges.cclTh.min : clampByRange("cclTh", thInput.value),
+    });
     dirtyCclIndices.add(idx);
   });
   setDirtyStatus();
@@ -1800,19 +1805,24 @@ function renderCalibrationKeyDetail(entry, param, liveData = null) {
 
 function renderCancelKeyDetail(entry, param) {
   selectedLayoutEntry = entry;
-  selectedCancelTargetIdx = selectedCancelTargetIdx == null ? normalizeCclTarget(param?.tgtIdx) : normalizeCclTarget(selectedCancelTargetIdx);
+  if (selectedCancelTargetIdx === undefined) {
+    selectedCancelTargetIdx = normalizeCclTarget(param?.tgtIdx, entry.idx);
+  } else {
+    selectedCancelTargetIdx = normalizeCclTarget(selectedCancelTargetIdx, entry.idx);
+  }
   cancelKeyDetail.innerHTML = `
     <div class="cancel-builder">
       <section class="cancel-builder-block trigger-block">
         <h4>Trigger</h4>
         <button class="secondary-button ${cancelPickMode === "trigger" ? "active-mode" : ""}" id="pickCancelTriggerButton" type="button">選択ボタン</button>
         <div class="cancel-selected-value">Key ID ${entry.idx}</div>
+        <button class="secondary-button" id="deleteCancelTargetButton" type="button">Delete Target</button>
       </section>
       <div class="cancel-builder-arrow">→</div>
       <section class="cancel-builder-block target-block">
         <h4>Target</h4>
         <button class="secondary-button ${cancelPickMode === "target" ? "active-mode" : ""}" id="pickCancelTargetButton" type="button">選択ボタン</button>
-        <div class="cancel-selected-value">${formatCclTargetLabel(selectedCancelTargetIdx)}</div>
+        <div class="cancel-selected-value">${formatCclTargetLabel(selectedCancelTargetIdx, entry.idx)}</div>
       </section>
       <section class="cancel-builder-block threshold-block">
         <h4>Threshold [um]</h4>
@@ -1823,6 +1833,10 @@ function renderCancelKeyDetail(entry, param) {
   `;
   cancelKeyDetail.querySelector("#pickCancelTriggerButton")?.addEventListener("click", () => {
     cancelPickMode = "trigger";
+    renderCancelLayout(lastLayoutEntries, lastCclParams, lastLayoutState, selectedLayoutEntry?.idx);
+  });
+  cancelKeyDetail.querySelector("#deleteCancelTargetButton")?.addEventListener("click", () => {
+    selectedCancelTargetIdx = 255;
     renderCancelLayout(lastLayoutEntries, lastCclParams, lastLayoutState, selectedLayoutEntry?.idx);
   });
   cancelKeyDetail.querySelector("#pickCancelTargetButton")?.addEventListener("click", () => {
@@ -2285,7 +2299,7 @@ function renderCancelLayout(entries, cclParams, state, selectedIdx = null) {
         ${cclParamHtml(entry, param)}
       </span>
     `;
-    key.title = `idx ${entry.idx} / tgt ${formatCclTarget(param?.tgtIdx)} / th ${formatParamValue(param?.tgtTh)}`;
+    key.title = `idx ${entry.idx} / tgt ${formatCclTarget(param?.tgtIdx, entry.idx)} / th ${formatParamValue(param?.tgtTh)}`;
     key.addEventListener("click", (event) => selectCancelKey(entry, event));
     cancelKeyboardCanvas.append(key);
   }
@@ -2706,8 +2720,8 @@ async function readAndRenderCancelGui() {
   }
   const cclBytes = await readBlock(BLOCK_CCL, lastInfo.cclBlockSize, "CCL param");
   lastCclParams = parseCclParams(cclBytes, lastInfo.cclParamSize);
-  lastCclParams.forEach((param) => {
-    param.tgtIdx = normalizeCclTarget(param.tgtIdx);
+  lastCclParams.forEach((param, idx) => {
+    param.tgtIdx = normalizeCclTarget(param.tgtIdx, idx);
   });
   dirtyCclIndices.clear();
   selectedCancelKeyIndices.clear();
