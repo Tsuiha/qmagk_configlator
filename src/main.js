@@ -201,7 +201,7 @@ function getRealtimeMetricValue(entryIdx, dcurValues, adcValues) {
   const stroke = Number(lastDynParams[entryIdx]?.stroke);
   const dcur = Number(dcurValues?.[entryIdx]);
   if (!Number.isFinite(stroke) || !Number.isFinite(dcur)) return Number.NaN;
-  return Math.max(0, stroke - dcur);
+  return stroke - dcur;
 }
 
 function niceCeil(value) {
