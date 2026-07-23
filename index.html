@@ -271,7 +271,7 @@
             <div class="realtime-left">
               <section class="config-card realtime-about-card">
                 <h3>About : Depth Monitor</h3>
-                <p>リアルタイムで各キーの押し込み量[um], ADC値をモニターすることができます。</p>
+                <p>リアルタイムで各キーの押し込み量[um], ADC値, 磁束密度[Gs]をモニターすることができます。</p>
                 <p>選択したキーについてグラフを表示することができます。</p>
               </section>
               <section class="config-card realtime-control-card no-label">
@@ -285,7 +285,12 @@
                     <select id="realtimeMetricSelect">
                       <option value="depth">Depth [um]</option>
                       <option value="adc">ADC raw</option>
+                      <option value="flux">Flux [Gs]</option>
                     </select>
+                  </label>
+                  <label class="poll-field realtime-flux-sensitivity-field" id="realtimeFluxSensitivityField" hidden>
+                    <span>sensor sensitivity [mV/Gs]</span>
+                    <input id="realtimeHallSensitivityInput" type="number" min="0.001" step="0.001" list="hallSensitivityPresets" />
                   </label>
                   <button class="primary-button" id="startRealtimeButton" type="button" disabled>Start</button>
                   <button class="secondary-button" id="stopRealtimeButton" type="button" disabled>Stop</button>

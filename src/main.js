@@ -153,6 +153,8 @@ const sensiOffsetInputs = Array.from({ length: SENSI_OFFSET_STAGE_COUNT }, (_, i
 const curveCanvas = document.querySelector("#curveCanvas");
 const curveNote = document.querySelector("#curveNote");
 const hallSensitivityInput = document.querySelector("#hallSensitivityInput");
+const realtimeFluxSensitivityField = document.querySelector("#realtimeFluxSensitivityField");
+const realtimeHallSensitivityInput = document.querySelector("#realtimeHallSensitivityInput");
 const exportCurveCsvButton = document.querySelector("#exportCurveCsvButton");
 const realtimeKeyboardCanvas = document.querySelector("#realtimeKeyboardCanvas");
 const realtimePlotCanvas = document.querySelector("#realtimePlotCanvas");
@@ -179,24 +181,76 @@ function isCalibrationUiLocked() {
 }
 
 function getRealtimeMetric() {
-  return realtimeMetricSelect?.value === "adc" ? "adc" : "depth";
+  return ["adc", "flux"].includes(realtimeMetricSelect?.value) ? realtimeMetricSelect.value : "depth";
 }
 
 function getRealtimeMetricUnit() {
-  return getRealtimeMetric() === "adc" ? "raw" : "um";
+  const metric = getRealtimeMetric();
+  if (metric === "adc") return "raw";
+  if (metric === "flux") return "Gs";
+  return "um";
 }
 
 function getRealtimeMetricLabel() {
-  return getRealtimeMetric() === "adc" ? "ADC raw" : "Depth [um]";
+  const metric = getRealtimeMetric();
+  if (metric === "adc") return "ADC raw";
+  if (metric === "flux") return "Flux [Gs]";
+  return "Depth [um]";
 }
 
 function getRealtimeMetricCode() {
-  return getRealtimeMetric() === "adc" ? 1 : 0;
+  return getRealtimeMetric() === "depth" ? 0 : 1;
+}
+
+function getHallSensorSensitivity(input = hallSensitivityInput, fallback = 2.5) {
+  const value = Number.parseFloat(input?.value);
+  if (Number.isFinite(value) && value > 0) return Math.max(0.001, value);
+  return fallback;
+}
+
+function calcFluxGauss(entryIdx, adcRaw) {
+  const adcValue = Number(adcRaw);
+  const refAdcVal = Number(lastCalParams[entryIdx]?.refAdcVal);
+  const sensitivity = getHallSensorSensitivity(realtimeHallSensitivityInput, Number.NaN);
+  if (!Number.isFinite(adcValue) || !Number.isFinite(refAdcVal) || !Number.isFinite(sensitivity)) return Number.NaN;
+  return ((adcValue - refAdcVal) * 3300) / 4096 / sensitivity;
+}
+
+function formatRealtimeMetricValue(value) {
+  if (!Number.isFinite(value)) return "-";
+  return getRealtimeMetric() === "flux" ? value.toFixed(2) : formatParamValue(value);
+}
+
+function updateRealtimeFluxSensitivityVisibility() {
+  const visible = getRealtimeMetric() === "flux";
+  if (realtimeFluxSensitivityField) {
+    realtimeFluxSensitivityField.hidden = !visible;
+    realtimeFluxSensitivityField.classList.toggle("visible", visible);
+    realtimeFluxSensitivityField.style.display = visible ? "grid" : "none";
+  }
+  if (realtimeHallSensitivityInput) {
+    realtimeHallSensitivityInput.disabled = !visible || !activeDevice?.opened || Boolean(realtimeTimerId);
+  }
+}
+
+function syncHallSensitivityInputs(sourceInput) {
+  const value = sourceInput?.value ?? "";
+  if (sourceInput !== hallSensitivityInput && hallSensitivityInput) {
+    hallSensitivityInput.value = value;
+  }
+  if (sourceInput !== realtimeHallSensitivityInput && realtimeHallSensitivityInput) {
+    realtimeHallSensitivityInput.value = value;
+  }
 }
 
 function getRealtimeMetricValue(entryIdx, dcurValues, adcValues) {
-  if (getRealtimeMetric() === "adc") {
-    return Number(adcValues?.[entryIdx]);
+  const metric = getRealtimeMetric();
+  const adcValue = Number(adcValues?.[entryIdx]);
+  if (metric === "adc") {
+    return adcValue;
+  }
+  if (metric === "flux") {
+    return calcFluxGauss(entryIdx, adcValue);
   }
   const stroke = Number(lastDynParams[entryIdx]?.stroke);
   const dcur = Number(dcurValues?.[entryIdx]);
@@ -487,6 +541,7 @@ function setActionButtonsEnabled(enabled) {
   stopRealtimeButton.disabled = !enabled || !realtimeTimerId;
   realtimeIntervalInput.disabled = !enabled || Boolean(realtimeTimerId);
   realtimeMetricSelect.disabled = !enabled || Boolean(realtimeTimerId);
+  updateRealtimeFluxSensitivityVisibility();
   saveParam1Button.disabled = !enabled || (dirtyDynIndices.size === 0 && !sensiOffsetDirty);
   saveCclButton.disabled = !enabled || dirtyCclIndices.size === 0;
   renderSensiOffsetInputs();
@@ -1994,7 +2049,7 @@ function getSelectedCurveData(step = 0.25) {
   }
 
   const stroke = Math.max(1, dyn.stroke || 1);
-  const sensitivity = Math.max(0.001, Number.parseFloat(hallSensitivityInput.value) || 2.5);
+  const sensitivity = getHallSensorSensitivity();
   const gaussForPercent = (percent) => {
     const denominator = ((100 - percent) * stroke) / 100 + cal.refPoint;
     if (denominator <= 0) return NaN;
@@ -2354,7 +2409,7 @@ function renderRealtimeKeyboardLayout(entries, state, dcurValues) {
     key.innerHTML = `
       ${shape}
       <span class="key-content realtime-param-values">
-        <span class="depth-value">${Number.isFinite(displayValue) ? formatParamValue(displayValue) : "-"}</span>
+        <span class="depth-value">${formatRealtimeMetricValue(displayValue)}</span>
         <span class="key-sub">${getRealtimeMetricUnit()}</span>
       </span>
     `;
@@ -2385,7 +2440,7 @@ function trimRealtimePlotSamples() {
 
 function recordRealtimePlotSample(sample, sampleTimeMs) {
   if (!sample) return;
-  const metricKey = sample.metric === "adc" ? "adc" : "depth";
+  const metricKey = ["adc", "flux"].includes(sample.metric) ? sample.metric : "depth";
   const value = Number(sample.value);
   if (!Number.isFinite(value)) return;
   if (realtimeLogStartTimeMs == null) realtimeLogStartTimeMs = sampleTimeMs;
@@ -2504,7 +2559,7 @@ function exportRealtimeCsv() {
     return;
   }
   const metricKey = getRealtimeMetric();
-  const metricHeader = metricKey === "adc" ? "adc_raw" : "depth_um";
+  const metricHeader = metricKey === "adc" ? "adc_raw" : metricKey === "flux" ? "flux_gs" : "depth_um";
   const rows = [
     `elapsed_seconds,${metricHeader}`,
     ...realtimePlotSamples.map((point) => {
@@ -2561,10 +2616,15 @@ async function readRealtimeKey(idx) {
   packet[4] = getRealtimeMetricCode();
   const response = await sendRawPacket(packet, 500, false);
   checkStatus(response);
-  const responseMetric = response[4] === 1 ? "adc" : "depth";
-  const rawValue = responseMetric === "adc" ? readU16(response, 7) : readI16LE(response, 7);
+  const requestMetric = getRealtimeMetric();
+  const responseMetric = requestMetric === "flux" && response[4] === 1 ? "flux" : response[4] === 1 ? "adc" : "depth";
+  const rawValue = response[4] === 1 ? readU16(response, 7) : readI16LE(response, 7);
   const stroke = Number(lastDynParams[response[3]]?.stroke);
-  const value = responseMetric === "adc" ? rawValue : Number.isFinite(stroke) ? Math.max(0, stroke - rawValue) : Number.NaN;
+  const value = responseMetric === "adc"
+    ? rawValue
+    : responseMetric === "flux"
+      ? calcFluxGauss(response[3], rawValue)
+      : Number.isFinite(stroke) ? Math.max(0, stroke - rawValue) : Number.NaN;
   return {
     idx: response[3],
     metric: responseMetric,
@@ -2612,6 +2672,8 @@ async function pollRealtimeOnce() {
       const sampleTime = performance.now();
       if (sample.metric === "adc") {
         realtimeAdcValues[sample.idx] = sample.value;
+      } else if (sample.metric === "flux") {
+        realtimeAdcValues[sample.idx] = sample.rawValue;
       } else {
         realtimeDcurValues[sample.idx] = sample.rawValue;
       }
@@ -2619,7 +2681,7 @@ async function pollRealtimeOnce() {
       sampled = true;
     }
     if (!sampled || now - realtimeLastLayoutReadMs >= REALTIME_LAYOUT_UPDATE_MS) {
-      if (getRealtimeMetric() === "adc") {
+      if (getRealtimeMetric() === "adc" || getRealtimeMetric() === "flux") {
         realtimeAdcValues = await readAllAdcCur();
       } else {
         realtimeDcurValues = await readAllDcur();
@@ -2638,7 +2700,7 @@ async function pollRealtimeOnce() {
 }
 
 async function startRealtimeMode() {
-  if (!lastLayoutEntries.length || !lastLayoutState) {
+  if (!lastLayoutEntries.length || !lastLayoutState || !lastDynParams.length || !lastCalParams.length) {
     await readAndRenderLayoutGui();
   }
   normalizeRealtimeIntervalInput();
@@ -2854,7 +2916,15 @@ enableCancelButton?.addEventListener("click", () => {
 disableCancelButton?.addEventListener("click", () => {
   setRuntimeState({ cclEnabled: false }).catch((error) => log(error.message, "error"));
 });
-hallSensitivityInput.addEventListener("input", drawSelectedKeyCurve);
+hallSensitivityInput.addEventListener("input", () => {
+  syncHallSensitivityInputs(hallSensitivityInput);
+  drawSelectedKeyCurve();
+  if (getRealtimeMetric() === "flux") {
+    resetRealtimePlotBuffer();
+    renderRealtimeKeyboardLayout(lastLayoutEntries, lastLayoutState, realtimeDcurValues);
+    renderRealtimePlot();
+  }
+});
 exportCurveCsvButton.addEventListener("click", exportSelectedCurveCsv);
 realtimeExportCsvButton.addEventListener("click", exportRealtimeCsv);
 realtimeIntervalInput.addEventListener("blur", normalizeRealtimeIntervalInput);
@@ -2886,9 +2956,19 @@ adminPasswordInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") unlockAdmin();
 });
 realtimeMetricSelect.addEventListener("change", () => {
+  updateRealtimeFluxSensitivityVisibility();
   resetRealtimePlotBuffer();
   renderRealtimeKeyboardLayout(lastLayoutEntries, lastLayoutState, realtimeDcurValues);
   renderRealtimePlot();
 });
+realtimeHallSensitivityInput?.addEventListener("input", () => {
+  syncHallSensitivityInputs(realtimeHallSensitivityInput);
+  if (getRealtimeMetric() === "flux") {
+    resetRealtimePlotBuffer();
+    renderRealtimeKeyboardLayout(lastLayoutEntries, lastLayoutState, realtimeDcurValues);
+    renderRealtimePlot();
+  }
+});
 
 applyParamRangesToInputs();
+updateRealtimeFluxSensitivityVisibility();

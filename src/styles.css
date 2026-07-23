@@ -849,6 +849,23 @@ dd {
   min-width: 132px;
 }
 
+.realtime-controls .realtime-flux-sensitivity-field {
+  min-width: 188px;
+  display: none;
+}
+
+.realtime-controls .realtime-flux-sensitivity-field[hidden] {
+  display: none !important;
+}
+
+.realtime-controls .realtime-flux-sensitivity-field.visible {
+  display: grid;
+}
+
+.realtime-controls .realtime-flux-sensitivity-field input {
+  width: 142px;
+}
+
 .realtime-layout-card {
   display: flex;
   flex-direction: column;
